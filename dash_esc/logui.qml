@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.3
+import QtQuick.Controls.Material 2.2
 
 import Vedder.vesc.commands 1.0
 import Vedder.vesc.configparams 1.0
@@ -12,6 +13,276 @@ Item {
     anchors.margins: 10
 
     property Commands mCommands: VescIf.commands()
+    property int section: 0
+
+    // Colors of the refreshed VESC Tool, or the closest older ones where the running VESC Tool does
+    // not have them, as it gives red for names it does not know
+    function themeColor(name, fallback) {
+        var c = Utility.getAppHexColor(name)
+        return c === "#ff0000" ? Utility.getAppHexColor(fallback) : c
+    }
+
+    readonly property color colCard: themeColor("cardBackground", "normalBackground")
+    readonly property color colBorder: themeColor("raisedBackground", "lightBackground")
+    readonly property color colText: themeColor("titleText", "lightText")
+    readonly property color colLabel: Utility.getAppHexColor("normalText")
+
+    // The parts below look like the VESC Tool settings pages. They are defined here rather than taken
+    // from VESC Tool, as the versions before its refreshed UI do not have them.
+
+    // Title above a group of settings
+    component SectionTitle: RowLayout {
+        property alias text: label.text
+
+        Layout.fillWidth: true
+        Layout.topMargin: 10
+        spacing: 10
+
+        Text {
+            id: label
+            color: Utility.getAppHexColor("lightAccent")
+            font.family: "Exan"
+            font.letterSpacing: 1.5
+            font.capitalization: Font.AllUppercase
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            height: 1
+            color: Utility.getAppHexColor("lightAccent")
+            opacity: 0.3
+        }
+    }
+
+    // Settings drawn as one card, with a line between them
+    component Group: Rectangle {
+        default property alias rows: rowColumn.data
+
+        Layout.fillWidth: true
+        implicitHeight: rowColumn.implicitHeight
+        radius: 12
+        color: colCard
+        border.color: colBorder
+
+        ColumnLayout {
+            id: rowColumn
+            width: parent.width
+            spacing: 0
+        }
+    }
+
+    // A setting in a Group, with its name on the left and its value, or a control such as a switch, on
+    // the right. Tapping it opens its editor below it.
+    component SettingRow: Item {
+        id: row
+
+        property string label: ""
+        property string value: ""
+        property Item control: null
+        property bool chevron: false
+        property bool expanded: false
+        default property alias editor: editorColumn.data
+        readonly property bool editable: editorColumn.children.length > 0
+
+        Layout.fillWidth: true
+        implicitHeight: header.height + (expanded ? editorColumn.implicitHeight + 12 : 0)
+        clip: true
+
+        Behavior on implicitHeight {
+            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+        }
+
+        onControlChanged: {
+            if (control) {
+                control.parent = holder
+            }
+        }
+
+        // One open at a time
+        onExpandedChanged: {
+            if (expanded && parent) {
+                for (var i = 0; i < parent.children.length; i++) {
+                    var r = parent.children[i]
+                    if (r !== row && r.editable !== undefined && r.expanded) {
+                        r.expanded = false
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            visible: row.y > 0
+            color: colBorder
+        }
+
+        Item {
+            id: header
+            width: parent.width
+            height: Math.max(52, headerRow.implicitHeight + 12)
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: row.editable
+                onClicked: row.expanded = !row.expanded
+            }
+
+            RowLayout {
+                id: headerRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 14
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    text: row.label
+                    wrapMode: Text.Wrap
+                    color: colText
+                    font.weight: row.expanded ? Font.Medium : Font.Normal
+                }
+
+                Text {
+                    Layout.maximumWidth: row.width * 0.45
+                    visible: row.control === null && text !== ""
+                    text: row.value
+                    elide: Text.ElideRight
+                    color: colText
+                    font.weight: Font.Medium
+                }
+
+                Item {
+                    id: holder
+                    implicitWidth: row.control ? row.control.implicitWidth : 0
+                    implicitHeight: row.control ? row.control.implicitHeight : 0
+                    visible: row.control !== null
+                }
+
+                Text {
+                    visible: row.chevron
+                    text: "›"
+                    rotation: row.expanded ? 90 : 0
+                    font.pointSize: 18
+                    color: Utility.getAppHexColor("disabledText")
+                }
+            }
+        }
+
+        ColumnLayout {
+            id: editorColumn
+            x: 14
+            y: header.height
+            width: parent.width - 26
+            visible: row.expanded || row.height > header.height + 1
+        }
+    }
+
+    // Background that styles ComboBox, SpinBox and TextField like the cards
+    component InputBackground: Rectangle {
+        implicitWidth: parent instanceof SpinBox ? 140 : 120
+        implicitHeight: 48
+        radius: 12
+        color: colCard
+        border.color: parent.activeFocus ? Material.accent : colBorder
+    }
+
+    // Help text under a group
+    component Note: Text {
+        Layout.fillWidth: true
+        Layout.leftMargin: 4
+        Layout.rightMargin: 4
+        wrapMode: Text.WordWrap
+        color: colLabel
+        font.pointSize: 10
+    }
+
+    // Section switcher: tap only, like the chips on the VESC Tool settings pages. It wraps instead of scrolling
+    // sideways, so that a sideways swipe always reaches the VESC Tool pages around the package.
+    component SectionChips: Flow {
+        id: chips
+
+        property var model: []
+        property int currentIndex: 0
+        // dots[i] === true shows a dot on chip i
+        property var dots: []
+
+        signal chosen(int index)
+
+        Layout.fillWidth: true
+        spacing: 6
+
+        Repeater {
+            model: chips.model
+
+            AbstractButton {
+                id: chip
+
+                readonly property bool on: index === chips.currentIndex
+
+                text: modelData
+                focusPolicy: Qt.NoFocus
+                // 44 pt touch target around the 32 pt pill
+                topInset: 6
+                bottomInset: 6
+                leftPadding: 12
+                rightPadding: 12
+                implicitHeight: 44
+                implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
+                Accessible.role: Accessible.PageTab
+                Accessible.name: text
+                onClicked: chips.chosen(index)
+
+                contentItem: Item {
+                    implicitWidth: chipRow.implicitWidth
+                    implicitHeight: chipRow.implicitHeight
+
+                    Row {
+                        id: chipRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Text {
+                            id: chipLabel
+                            anchors.verticalCenter: parent.verticalCenter
+                            // As wide as the selected label, so that selecting does not move the chips after it
+                            width: Math.ceil(Math.max(implicitWidth, selectedMetrics.advanceWidth))
+                            horizontalAlignment: Text.AlignHCenter
+                            text: chip.text
+                            color: chip.on ? colText : colLabel
+                            font.weight: chip.on ? Font.Medium : Font.Normal
+
+                            TextMetrics {
+                                id: selectedMetrics
+                                font.family: chipLabel.font.family
+                                font.pointSize: chipLabel.font.pointSize
+                                font.weight: Font.Medium
+                                text: chip.text
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 6
+                            height: 6
+                            radius: 3
+                            visible: chips.dots[index] === true
+                            color: Material.accent
+                        }
+                    }
+                }
+
+                background: Rectangle {
+                    radius: height / 2
+                    color: chip.on ? Qt.rgba(Material.accent.r, Material.accent.g, Material.accent.b, 0.12) : colCard
+                    border.width: chip.on ? 1.5 : 1
+                    border.color: chip.on ? Material.accent : colBorder
+                }
+            }
+        }
+    }
 
     Component.onCompleted: {
         if (VescIf.getLastFwRxParams().hw.includes("Express")) {
@@ -27,118 +298,132 @@ Item {
 
         Text {
             Layout.fillWidth: true
-            color: Utility.getAppHexColor("lightText")
-            horizontalAlignment: Text.AlignHCenter
-            font.pointSize: 20
+            color: colText
+            font.pointSize: 15
+            font.weight: Font.Medium
             text: "Dash ESC"
         }
 
-        TabBar {
-            id: tabBar
-            currentIndex: swipeView.currentIndex
-            Layout.fillWidth: true
-            implicitWidth: 0
-            clip: true
-
-            property int buttons: 2
-            property int buttonWidth: 120
-
-            TabButton {
-                text: qsTr("Logging")
-                width: Math.max(tabBar.buttonWidth, tabBar.width / tabBar.buttons)
-            }
-            TabButton {
-                text: qsTr("Modes")
-                width: Math.max(tabBar.buttonWidth, tabBar.width / tabBar.buttons)
-            }
+        SectionChips {
+            model: ["Logging", "Modes"]
+            currentIndex: section
+            onChosen: function(index) { section = index }
         }
 
-        SwipeView {
-            id: swipeView
-            currentIndex: tabBar.currentIndex
-            Layout.fillHeight: true
+        StackLayout {
             Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: section
             clip: true
 
             Page {
-                GridLayout {
-                    columns: 2
-
+                ColumnLayout {
                     anchors.fill: parent
+                    spacing: 10
 
-                    GroupBox {
+                    // A Flickable rather than a ScrollView, so that scrolling glides
+                    Flickable {
+                        id: logScroll
                         Layout.fillWidth: true
-                        Layout.columnSpan: 2
-                        title: "Data to log"
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 0
+                        contentWidth: width
+                        contentHeight: logScrollCol.height + 10
+                        clip: true
+                        ScrollBar.vertical: ScrollBar {
+                            interactive: Qt.platform.os !== "ios" && Qt.platform.os !== "android"
+                        }
 
-                        GridLayout {
-                            anchors.fill: parent
-                            columns: 2
+                        ColumnLayout {
+                            id: logScrollCol
+                            y: 10
+                            // Clear of the scroll bar
+                            width: logScroll.width - logScroll.ScrollBar.vertical.implicitWidth - 4
+                            spacing: 10
 
-                            CheckBox {
-                                id: gnssLog
-                                text: "GNSS"
+                            SectionTitle {
+                                Layout.topMargin: 0
+                                text: "Data to Log"
                             }
 
-                            CheckBox {
-                                id: localLog
-                                text: "Local Values"
-                                checked: true
+                            Group {
+                                SettingRow {
+                                    label: "GNSS"
+                                    control: Switch {
+                                        id: gnssLog
+                                    }
+                                }
+
+                                SettingRow {
+                                    label: "Local Values"
+                                    control: Switch {
+                                        id: localLog
+                                        checked: true
+                                    }
+                                }
+
+                                SettingRow {
+                                    label: "CAN Values"
+                                    control: Switch {
+                                        id: canLog
+                                    }
+                                }
+
+                                SettingRow {
+                                    label: "BMS Values"
+                                    control: Switch {
+                                        id: bmsLog
+                                    }
+                                }
                             }
 
-                            CheckBox {
-                                id: canLog
-                                text: "CAN Values"
+                            SectionTitle {
+                                text: "Logger"
                             }
 
-                            CheckBox {
-                                id: bmsLog
-                                text: "BMS Values"
+                            Group {
+                                SettingRow {
+                                    label: "Logger CAN ID"
+                                    value: canId.value
+
+                                    SpinBox {
+                                        id: canId
+                                        Layout.fillWidth: true
+                                        background: InputBackground {}
+                                        from: -2
+                                        to: 254
+                                        value: 2
+                                    }
+                                }
+
+                                SettingRow {
+                                    label: "Log Rate"
+                                    value: parseFloat(logRate.realValue).toFixed(0) + " Hz"
+
+                                    DoubleSpinBox {
+                                        id: logRate
+                                        Layout.fillWidth: true
+                                        realFrom: 1
+                                        realTo: 200
+                                        realValue: 10
+                                        decimals: 0
+                                        suffix: " Hz"
+                                    }
+                                }
+
+                                SettingRow {
+                                    label: "Start logging at boot"
+                                    control: Switch {
+                                        id: startAtBoot
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Text {
-                        color: Utility.getAppHexColor("lightText")
-                        text: "Logger CAN ID"
-                    }
-
-                    SpinBox {
-                        id: canId
-                        Layout.fillWidth: true
-                        from: -2
-                        to: 254
-                        value: 2
-                    }
-
-                    Text {
-                        color: Utility.getAppHexColor("lightText")
-                        text: "Log Rate"
-                    }
-
-                    DoubleSpinBox {
-                        id: logRate
-                        Layout.fillWidth: true
-                        realFrom: 1
-                        realTo: 200
-                        realValue: 10
-                        decimals: 0
-                        suffix: " Hz"
-                    }
-
-                    CheckBox {
-                        Layout.columnSpan: 2
-                        id: startAtBoot
-                        text: "Start logging at boot"
-                    }
-
-                    Item {
-                        Layout.fillHeight: true
-                        Layout.columnSpan: 2
-                    }
-
                     RowLayout {
-                        Layout.columnSpan: 2
+                        Layout.fillWidth: true
+                        Layout.rightMargin: logScroll.ScrollBar.vertical.implicitWidth + 4
 
                         Button {
                             Layout.fillWidth: true
@@ -165,91 +450,89 @@ Item {
             }
 
             Page {
-                ScrollView {
+                // A Flickable rather than a ScrollView, so that scrolling glides
+                Flickable {
                     id: profileScroll
                     anchors.fill: parent
-                    contentWidth: parent.width
-                    contentHeight: scrollCol.preferredHeight
+                    contentWidth: width
+                    contentHeight: scrollCol.height + 10
                     clip: true
+                    ScrollBar.vertical: ScrollBar {
+                        interactive: Qt.platform.os !== "ios" && Qt.platform.os !== "android"
+                    }
 
                     ColumnLayout {
                         id: scrollCol
-                        width: profileScroll.width - 30
+                        y: 10
+                        // Clear of the scroll bar
+                        width: profileScroll.width - profileScroll.ScrollBar.vertical.implicitWidth - 4
+                        spacing: 10
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Servicing"
+                        SectionTitle {
+                            Layout.topMargin: 0
+                            text: "Servicing"
+                        }
 
-                            ColumnLayout {
-                                anchors.fill: parent
+                        Note {
+                            text: "Drive profiles scale the motor current, and anything measured " +
+                                  "with current is wrong while a scale is applied. Suspend them before " +
+                                  "detecting a motor or writing configuration, so the controller's own " +
+                                  "limits are the live ones. This turns itself off at the next power " +
+                                  "cycle, and the displays show SERVICE while it is on: there is no mode " +
+                                  "limiting and neutral does not hold the throttle shut."
+                        }
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    wrapMode: Text.WordWrap
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Drive profiles scale the motor current, and anything measured " +
-                                          "with current is wrong while a scale is applied. Suspend them before " +
-                                          "detecting a motor or writing configuration, so the controller's own " +
-                                          "limits are the live ones. This turns itself off at the next power " +
-                                          "cycle, and the displays show SERVICE while it is on: there is no mode " +
-                                          "limiting and neutral does not hold the throttle shut."
-                                }
-
-                                CheckBox {
+                        Group {
+                            SettingRow {
+                                label: "Suspend drive profiles"
+                                control: Switch {
                                     id: suspendBox
-                                    text: "Suspend drive profiles"
                                     onClicked: sendCode("(profile-suspend-set " + (checked ? 1 : 0) + ")")
-                                }
-
-                                Button {
-                                    Layout.fillWidth: true
-                                    text: "Capture these limits as the baseline"
-                                    enabled: suspendBox.checked
-                                    onClicked: sendCode("(limits-capture)")
-                                }
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    wrapMode: Text.WordWrap
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Press this once the controller is configured the way you want it. " +
-                                          "Those limits are what gets put back whenever the displays are unplugged " +
-                                          "or the profile is suspended."
                                 }
                             }
                         }
 
-                        GroupBox {
+                        Button {
                             Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Throttle Mode"
+                            text: "Capture these limits as the baseline"
+                            enabled: suspendBox.checked
+                            onClicked: sendCode("(limits-capture)")
+                        }
 
-                            ColumnLayout {
-                                anchors.fill: parent
+                        Note {
+                            text: "Press this once the controller is configured the way you want it. " +
+                                  "Those limits are what gets put back whenever the displays are unplugged " +
+                                  "or the profile is suspended."
+                        }
+
+                        SectionTitle {
+                            text: "Throttle Mode"
+                        }
+
+                        Group {
+                            SettingRow {
+                                label: "Throttle input"
+                                value: thrModeBox.currentText
+                                chevron: true
 
                                 ComboBox {
                                     id: thrModeBox
                                     Layout.fillWidth: true
+                                    background: InputBackground {}
                                     model: ["ADC1", "ADC2"]
                                     currentIndex: 0
                                 }
                             }
                         }
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Reverse"
+                        SectionTitle {
+                            text: "Reverse"
+                        }
 
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Speed"
-                                }
+                        Group {
+                            SettingRow {
+                                label: "Speed"
+                                value: parseFloat(modeRSpeed.realValue).toFixed(1) + " km/h"
 
                                 DoubleSpinBox {
                                     id: modeRSpeed
@@ -260,11 +543,11 @@ Item {
                                     decimals: 1
                                     suffix: " km/h"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Current"
-                                }
+                            SettingRow {
+                                label: "Current"
+                                value: parseFloat(modeRCurrent.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: modeRCurrent
@@ -276,11 +559,11 @@ Item {
                                     realStepSize: 10.0
                                     suffix: " %"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Brake"
-                                }
+                            SettingRow {
+                                label: "Brake"
+                                value: parseFloat(modeRCurrentBrake.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: modeRCurrentBrake
@@ -295,19 +578,14 @@ Item {
                             }
                         }
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Neutral"
+                        SectionTitle {
+                            text: "Neutral"
+                        }
 
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Brake"
-                                }
+                        Group {
+                            SettingRow {
+                                label: "Brake"
+                                value: parseFloat(modeNCurrentBrake.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: modeNCurrentBrake
@@ -322,19 +600,14 @@ Item {
                             }
                         }
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Mode 1"
+                        SectionTitle {
+                            text: "Mode 1"
+                        }
 
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Speed"
-                                }
+                        Group {
+                            SettingRow {
+                                label: "Speed"
+                                value: parseFloat(mode1Speed.realValue).toFixed(1) + " km/h"
 
                                 DoubleSpinBox {
                                     id: mode1Speed
@@ -345,11 +618,11 @@ Item {
                                     decimals: 1
                                     suffix: " km/h"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Current"
-                                }
+                            SettingRow {
+                                label: "Current"
+                                value: parseFloat(mode1Current.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode1Current
@@ -361,11 +634,11 @@ Item {
                                     realStepSize: 10.0
                                     suffix: " %"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Brake"
-                                }
+                            SettingRow {
+                                label: "Brake"
+                                value: parseFloat(mode1CurrentBrake.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode1CurrentBrake
@@ -380,19 +653,14 @@ Item {
                             }
                         }
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Mode 2"
+                        SectionTitle {
+                            text: "Mode 2"
+                        }
 
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Speed"
-                                }
+                        Group {
+                            SettingRow {
+                                label: "Speed"
+                                value: parseFloat(mode2Speed.realValue).toFixed(1) + " km/h"
 
                                 DoubleSpinBox {
                                     id: mode2Speed
@@ -403,11 +671,11 @@ Item {
                                     decimals: 1
                                     suffix: " km/h"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Current"
-                                }
+                            SettingRow {
+                                label: "Current"
+                                value: parseFloat(mode2Current.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode2Current
@@ -419,11 +687,11 @@ Item {
                                     realStepSize: 10.0
                                     suffix: " %"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Brake"
-                                }
+                            SettingRow {
+                                label: "Brake"
+                                value: parseFloat(mode2CurrentBrake.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode2CurrentBrake
@@ -438,19 +706,14 @@ Item {
                             }
                         }
 
-                        GroupBox {
-                            Layout.fillWidth: true
-                            Layout.columnSpan: 2
-                            title: "Mode 3"
+                        SectionTitle {
+                            text: "Mode 3"
+                        }
 
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Speed"
-                                }
+                        Group {
+                            SettingRow {
+                                label: "Speed"
+                                value: parseFloat(mode3Speed.realValue).toFixed(1) + " km/h"
 
                                 DoubleSpinBox {
                                     id: mode3Speed
@@ -461,11 +724,11 @@ Item {
                                     decimals: 1
                                     suffix: " km/h"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Current"
-                                }
+                            SettingRow {
+                                label: "Current"
+                                value: parseFloat(mode3Current.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode3Current
@@ -477,11 +740,11 @@ Item {
                                     realStepSize: 10.0
                                     suffix: " %"
                                 }
+                            }
 
-                                Text {
-                                    color: Utility.getAppHexColor("lightText")
-                                    text: "Brake"
-                                }
+                            SettingRow {
+                                label: "Brake"
+                                value: parseFloat(mode3CurrentBrake.realValue).toFixed(0) + " %"
 
                                 DoubleSpinBox {
                                     id: mode3CurrentBrake
@@ -494,10 +757,6 @@ Item {
                                     suffix: " %"
                                 }
                             }
-                        }
-
-                        Item {
-                            Layout.fillHeight: true
                         }
                     }
                 }
