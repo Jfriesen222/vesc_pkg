@@ -57,6 +57,7 @@ Item {
     property real tripKm:    0
     property real tripWh:    0
     property real battPct:   -1
+    property int  section:   0
 
     // Cloud / MQTT. mqttLast mirrors the lisp side:
     //   0 idle  1 published  2 publish failed  3 connect failed  4 no context
@@ -76,12 +77,375 @@ Item {
     // Where the firmware writes logs. Paths are relative to file_basepath.
     readonly property string logDir: "/log_can"
 
-    readonly property color colGreen:  Utility.getAppHexColor("green")
-    readonly property color colOrange: Utility.getAppHexColor("orange")
-    readonly property color colRed:    Utility.getAppHexColor("red")
-    readonly property color colDim:    Utility.getAppHexColor("disabledText")
-    readonly property color colText:   Utility.getAppHexColor("lightText")
-    readonly property color colCard:   Utility.getAppHexColor("lightBackground")
+    // Colors of the refreshed VESC Tool, or the closest older ones where the running VESC Tool does
+    // not have them, as it gives red for names it does not know
+    function themeColor(name, fallback) {
+        var c = Utility.getAppHexColor(name)
+        return c === "#ff0000" ? Utility.getAppHexColor(fallback) : c
+    }
+
+    readonly property color colCard: themeColor("cardBackground", "normalBackground")
+    readonly property color colBorder: themeColor("raisedBackground", "lightBackground")
+    readonly property color colText: themeColor("titleText", "lightText")
+    readonly property color colLabel: Utility.getAppHexColor("normalText")
+    readonly property color colGreen: themeColor("positive", "green")
+    readonly property color colOrange: themeColor("warning", "orange")
+    readonly property color colRed: themeColor("danger", "red")
+    readonly property color colDim: Utility.getAppHexColor("disabledText")
+    readonly property color colWarnText: themeColor("warningText", "orange")
+
+    // The parts below look like the VESC Tool settings pages. They are defined here rather than taken
+    // from VESC Tool, as the versions before its refreshed UI do not have them.
+
+    // Title above a group of settings
+    component SectionTitle: RowLayout {
+        property alias text: label.text
+
+        Layout.fillWidth: true
+        Layout.topMargin: 10
+        spacing: 10
+
+        Text {
+            id: label
+            color: Utility.getAppHexColor("lightAccent")
+            font.family: "Exan"
+            font.letterSpacing: 1.5
+            font.capitalization: Font.AllUppercase
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            height: 1
+            color: Utility.getAppHexColor("lightAccent")
+            opacity: 0.3
+        }
+    }
+
+    // Settings drawn as one card, with a line between them
+    component Group: Rectangle {
+        default property alias rows: rowColumn.data
+
+        Layout.fillWidth: true
+        implicitHeight: rowColumn.implicitHeight
+        radius: 12
+        color: colCard
+        border.color: colBorder
+
+        ColumnLayout {
+            id: rowColumn
+            width: parent.width
+            spacing: 0
+        }
+    }
+
+    // A setting in a Group, with its name on the left and its value, or a control such as a switch, on
+    // the right. Tapping it opens its editor below it.
+    component SettingRow: Item {
+        id: row
+
+        property string label: ""
+        property string value: ""
+        property Item control: null
+        property bool chevron: false
+        property bool expanded: false
+        default property alias editor: editorColumn.data
+        readonly property bool editable: editorColumn.children.length > 0
+
+        Layout.fillWidth: true
+        implicitHeight: header.height + (expanded ? editorColumn.implicitHeight + 12 : 0)
+        clip: true
+
+        Behavior on implicitHeight {
+            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+        }
+
+        onControlChanged: {
+            if (control) {
+                control.parent = holder
+            }
+        }
+
+        // One open at a time
+        onExpandedChanged: {
+            if (expanded && parent) {
+                for (var i = 0; i < parent.children.length; i++) {
+                    var r = parent.children[i]
+                    if (r !== row && r.editable !== undefined && r.expanded) {
+                        r.expanded = false
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            visible: row.y > 0
+            color: colBorder
+        }
+
+        Item {
+            id: header
+            width: parent.width
+            height: Math.max(52, headerRow.implicitHeight + 12)
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: row.editable
+                onClicked: row.expanded = !row.expanded
+            }
+
+            RowLayout {
+                id: headerRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 14
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    text: row.label
+                    wrapMode: Text.Wrap
+                    color: colText
+                    font.weight: row.expanded ? Font.Medium : Font.Normal
+                }
+
+                Text {
+                    Layout.maximumWidth: row.width * 0.45
+                    visible: row.control === null && text !== ""
+                    text: row.value
+                    elide: Text.ElideRight
+                    color: colText
+                    font.weight: Font.Medium
+                }
+
+                Item {
+                    id: holder
+                    implicitWidth: row.control ? row.control.implicitWidth : 0
+                    implicitHeight: row.control ? row.control.implicitHeight : 0
+                    visible: row.control !== null
+                }
+
+                Text {
+                    visible: row.chevron
+                    text: "›"
+                    rotation: row.expanded ? 90 : 0
+                    font.pointSize: 18
+                    color: Utility.getAppHexColor("disabledText")
+                }
+            }
+        }
+
+        ColumnLayout {
+            id: editorColumn
+            x: 14
+            y: header.height
+            width: parent.width - 26
+            visible: row.expanded || row.height > header.height + 1
+        }
+    }
+
+    // Background that styles ComboBox, SpinBox and TextField like the cards
+    component InputBackground: Rectangle {
+        implicitWidth: parent instanceof SpinBox ? 140 : 120
+        implicitHeight: 48
+        radius: 12
+        color: colCard
+        border.color: parent.activeFocus ? Material.accent : colBorder
+    }
+
+    // Help text under a group
+    component Note: Text {
+        Layout.fillWidth: true
+        Layout.leftMargin: 4
+        Layout.rightMargin: 4
+        wrapMode: Text.WordWrap
+        color: colLabel
+        font.pointSize: 10
+    }
+
+    // Section switcher: tap only, like the chips on the VESC Tool settings pages. It wraps instead of scrolling
+    // sideways, so that a sideways swipe always reaches the VESC Tool pages around the package.
+    component SectionChips: Flow {
+        id: chips
+
+        property var model: []
+        property int currentIndex: 0
+        // dots[i] === true shows a dot on chip i
+        property var dots: []
+
+        signal chosen(int index)
+
+        Layout.fillWidth: true
+        spacing: 6
+
+        Repeater {
+            model: chips.model
+
+            AbstractButton {
+                id: chip
+
+                readonly property bool on: index === chips.currentIndex
+
+                text: modelData
+                focusPolicy: Qt.NoFocus
+                // 44 pt touch target around the 32 pt pill
+                topInset: 6
+                bottomInset: 6
+                leftPadding: 12
+                rightPadding: 12
+                implicitHeight: 44
+                implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
+                Accessible.role: Accessible.PageTab
+                Accessible.name: text
+                onClicked: chips.chosen(index)
+
+                contentItem: Item {
+                    implicitWidth: chipRow.implicitWidth
+                    implicitHeight: chipRow.implicitHeight
+
+                    Row {
+                        id: chipRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Text {
+                            id: chipLabel
+                            anchors.verticalCenter: parent.verticalCenter
+                            // As wide as the selected label, so that selecting does not move the chips after it
+                            width: Math.ceil(Math.max(implicitWidth, selectedMetrics.advanceWidth))
+                            horizontalAlignment: Text.AlignHCenter
+                            text: chip.text
+                            color: chip.on ? colText : colLabel
+                            font.weight: chip.on ? Font.Medium : Font.Normal
+
+                            TextMetrics {
+                                id: selectedMetrics
+                                font.family: chipLabel.font.family
+                                font.pointSize: chipLabel.font.pointSize
+                                font.weight: Font.Medium
+                                text: chip.text
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 6
+                            height: 6
+                            radius: 3
+                            visible: chips.dots[index] === true
+                            color: Material.accent
+                        }
+                    }
+                }
+
+                background: Rectangle {
+                    radius: height / 2
+                    color: chip.on ? Qt.rgba(Material.accent.r, Material.accent.g, Material.accent.b, 0.12) : colCard
+                    border.width: chip.on ? 1.5 : 1
+                    border.color: chip.on ? Material.accent : colBorder
+                }
+            }
+        }
+    }
+
+    // A status in a Group: a dot, its name and what it reports, and room on the right for more
+    component StatusRow: Item {
+        id: statusRow
+
+        property alias title: titleText.text
+        property alias line: lineText.text
+        property color dot
+        default property alias extra: extraRow.data
+
+        Layout.fillWidth: true
+        implicitHeight: 64
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            visible: statusRow.y > 0
+            color: colBorder
+        }
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 14
+            anchors.rightMargin: 12
+            spacing: 12
+
+            Rectangle {
+                width: 10
+                height: 10
+                radius: 5
+                color: statusRow.dot
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 1
+
+                Text {
+                    id: titleText
+                    color: colText
+                }
+
+                Text {
+                    id: lineText
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    color: colLabel
+                    font.pointSize: 10
+                }
+            }
+
+            RowLayout {
+                id: extraRow
+                spacing: 8
+            }
+        }
+    }
+
+    // TextField styled like the cards, with the placeholder inside the card instead of on its border.
+    // The Filled style is set from script, as VESC Tool versions with an older Qt do not have it.
+    component InputField: TextField {
+        topInset: 0
+        background: InputBackground {}
+
+        Component.onCompleted: {
+            try {
+                Material.containerStyle = Material.Filled
+            } catch (e) {
+            }
+        }
+    }
+
+    // A line in a list in a Group
+    component ListRow: Item {
+        id: listRow
+
+        default property alias content: rowLayout.data
+
+        Layout.fillWidth: true
+        implicitHeight: 56
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            visible: listRow.y > 0
+            color: colBorder
+        }
+
+        RowLayout {
+            id: rowLayout
+            anchors.fill: parent
+            anchors.leftMargin: 14
+            anchors.rightMargin: 8
+            spacing: 8
+        }
+    }
 
     function canDotColor() {
         if (!haveData) return colDim
@@ -316,244 +680,105 @@ Item {
         anchors.fill: parent
         spacing: 8
 
-        TabBar {
-            id: tabBar
+        Text {
             Layout.fillWidth: true
-            TabButton { text: "Status" }
-            TabButton { text: "Logs" }
-            TabButton { text: nPending > 0 ? "Access (" + nPending + ")" : "Access" }
-            TabButton { text: "Settings" }
+            color: colText
+            font.pointSize: 15
+            font.weight: Font.Medium
+            text: "VL Link Status"
+        }
+
+        SectionChips {
+            model: ["Status", "Logs", nPending > 0 ? "Access (" + nPending + ")" : "Access", "Settings"]
+            dots: [false, false, nPending > 0, false]
+            currentIndex: section
+            onChosen: function(index) { section = index }
         }
 
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: tabBar.currentIndex
+            currentIndex: section
 
             // ================= STATUS =================
             ColumnLayout {
                 spacing: 10
 
-                // ---- CAN ----
-                Rectangle {
+                Flickable {
+                    id: statusFlick
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 78
-                    radius: 6
-                    color: colCard
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 14
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 16; height: 16; radius: 8
-                            color: canDotColor()
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Text {
-                                text: "CAN Bus"
-                                color: colText
-                                font.pixelSize: 17
-                                font.bold: true
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: canLine()
-                                color: colDim
-                                font.pixelSize: 14
-                                elide: Text.ElideRight
-                            }
-                        }
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 0
+                    clip: true
+                    contentWidth: width
+                    contentHeight: statusCol.height
+                    ScrollBar.vertical: ScrollBar {
+                        interactive: Qt.platform.os !== "ios" && Qt.platform.os !== "android"
                     }
-                }
 
-                // ---- LTE ----
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 78
-                    radius: 6
-                    color: colCard
+                    ColumnLayout {
+                        id: statusCol
+                        // Clear of the scroll bar
+                        width: statusFlick.width - statusFlick.ScrollBar.vertical.implicitWidth - 4
+                        spacing: 10
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 14
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 16; height: 16; radius: 8
-                            color: lteDotColor()
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Text {
-                                text: "LTE"
-                                color: colText
-                                font.pixelSize: 17
-                                font.bold: true
+                        Group {
+                            StatusRow {
+                                title: "CAN Bus"
+                                line: canLine()
+                                dot: canDotColor()
                             }
 
-                            Text {
-                                Layout.fillWidth: true
-                                text: lteLine()
-                                color: colDim
-                                font.pixelSize: 14
-                                elide: Text.ElideRight
-                            }
-                        }
+                            StatusRow {
+                                title: "LTE"
+                                line: lteLine()
+                                dot: lteDotColor()
 
-                        // Signal meter. Row sets x only, so each bar is
-                        // pushed to a common baseline by hand.
-                        Row {
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 3
+                                // Signal meter. Row sets x only, so each bar is
+                                // pushed to a common baseline by hand.
+                                Row {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    spacing: 3
 
-                            Repeater {
-                                model: 5
-                                Rectangle {
-                                    width: 5
-                                    radius: 1
-                                    height: 6 + index * 4
-                                    y: 22 - height
-                                    color: index < sigBars() ? lteDotColor() : colDim
-                                    opacity: index < sigBars() ? 1.0 : 0.25
+                                    Repeater {
+                                        model: 5
+                                        Rectangle {
+                                            width: 5
+                                            radius: 1
+                                            height: 6 + index * 4
+                                            y: 22 - height
+                                            color: index < sigBars() ? lteDotColor() : colDim
+                                            opacity: index < sigBars() ? 1.0 : 0.25
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                }
 
-                // ---- Storage ----
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 78
-                    radius: 6
-                    color: colCard
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 14
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 16; height: 16; radius: 8
-                            color: sdDotColor()
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Text {
-                                text: "Storage"
-                                color: colText
-                                font.pixelSize: 17
-                                font.bold: true
+                            StatusRow {
+                                title: "Storage"
+                                line: sdLine()
+                                dot: sdDotColor()
                             }
 
-                            Text {
-                                Layout.fillWidth: true
-                                text: sdLine()
-                                color: colDim
-                                font.pixelSize: 14
-                                elide: Text.ElideRight
-                            }
-                        }
-                    }
-                }
+                            StatusRow {
+                                title: "Cloud"
+                                line: cloudLine()
+                                dot: cloudDotColor()
 
-                // ---- Cloud ----
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 78
-                    radius: 6
-                    color: colCard
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 14
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 16; height: 16; radius: 8
-                            color: cloudDotColor()
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Text {
-                                text: "Cloud"
-                                color: colText
-                                font.pixelSize: 17
-                                font.bold: true
+                                Text {
+                                    visible: mqttOn && mqttUp
+                                    text: mqttInt + " s"
+                                    color: colLabel
+                                    font.pointSize: 10
+                                }
                             }
 
-                            Text {
-                                Layout.fillWidth: true
-                                text: cloudLine()
-                                color: colDim
-                                font.pixelSize: 14
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Text {
-                            visible: mqttOn && mqttUp
-                            text: mqttInt + " s"
-                            color: colDim
-                            font.pixelSize: 13
-                        }
-                    }
-                }
-
-                // ---- Trip ----
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 78
-                    radius: 6
-                    color: colCard
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 14
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            width: 16; height: 16; radius: 8
-                            color: lockState === 1 ? colRed
-                                   : (lockState < 0 ? colOrange
-                                                    : (guardOn ? colOrange : colDim))
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Text {
-                                text: "Trip"
-                                color: colText
-                                font.pixelSize: 17
-                                font.bold: true
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: !haveData ? "Waiting for device"
+                            StatusRow {
+                                title: "Trip"
+                                dot: lockState === 1 ? colRed
+                                     : (lockState < 0 ? colOrange
+                                                      : (guardOn ? colOrange : colDim))
+                                line: !haveData ? "Waiting for device"
                                       : tripKm.toFixed(2) + " km  \u00b7  " +
                                         tripWh.toFixed(0) + " Wh" +
                                         (tripKm > 0.05
@@ -562,25 +787,21 @@ Item {
                                         (lockState === 1 ? "  \u00b7  LOCKED"
                                             : lockState < 0 ? "  \u00b7  lock unknown" : "") +
                                         (guardOn ? "  \u00b7  guarded" : "")
-                                color: colDim
-                                font.pixelSize: 14
-                                elide: Text.ElideRight
-                            }
-                        }
 
-                        Button {
-                            text: "Reset"
-                            implicitHeight: 40
-                            enabled: VescIf.isPortConnected()
-                            onClicked: sendCode("(trip-reset)")
+                                Button {
+                                    text: "Reset"
+                                    implicitHeight: 40
+                                    enabled: VescIf.isPortConnected()
+                                    onClicked: sendCode("(trip-reset)")
+                                }
+                            }
                         }
                     }
                 }
 
-                Item { Layout.fillHeight: true }
-
                 RowLayout {
                     Layout.fillWidth: true
+                    Layout.rightMargin: statusFlick.ScrollBar.vertical.implicitWidth + 4
                     spacing: 8
 
                     Button {
@@ -602,6 +823,7 @@ Item {
 
                 Button {
                     Layout.fillWidth: true
+                    Layout.rightMargin: statusFlick.ScrollBar.vertical.implicitWidth + 4
                     Layout.preferredHeight: 48
                     text: logging ? "Stop Logging" : "Start Logging"
                     enabled: VescIf.isPortConnected() && sdOk
@@ -610,6 +832,7 @@ Item {
 
                 Button {
                     Layout.fillWidth: true
+                    Layout.rightMargin: statusFlick.ScrollBar.vertical.implicitWidth + 4
                     Layout.preferredHeight: 48
                     text: "Rescan CAN Bus"
                     enabled: VescIf.isPortConnected()
@@ -624,12 +847,8 @@ Item {
             ColumnLayout {
                 spacing: 8
 
-                Text {
-                    Layout.fillWidth: true
+                Note {
                     text: "Tap Open to load a log into the log analysis view."
-                    color: colDim
-                    font.pixelSize: 13
-                    wrapMode: Text.WordWrap
                 }
 
                 // Above the list, not below it. The list grows with the
@@ -667,8 +886,9 @@ Item {
                     delegate: Rectangle {
                         width: fileList.width
                         height: 56
-                        radius: 6
+                        radius: 12
                         color: colCard
+                        border.color: colBorder
 
                         RowLayout {
                             anchors.fill: parent
@@ -684,14 +904,13 @@ Item {
                                     Layout.fillWidth: true
                                     text: model.name
                                     color: colText
-                                    font.pixelSize: 15
                                     elide: Text.ElideMiddle
                                 }
 
                                 Text {
                                     text: (model.size / 1024).toFixed(1) + " kB"
-                                    color: colDim
-                                    font.pixelSize: 12
+                                    color: colLabel
+                                    font.pointSize: 9
                                 }
                             }
 
@@ -726,31 +945,36 @@ Item {
                     Layout.fillWidth: true
                     visible: busy.running
                     text: dlProgress.value.toFixed(0) + " %"
-                    color: colDim
-                    font.pixelSize: 12
+                    color: colLabel
+                    font.pointSize: 10
                 }
 
             }
             // ================= ACCESS =================
-            // ScrollView because this pane grows with the roster and will
-            // not fit a phone screen once a few members are added.
+            // Scrolls because this pane grows with the roster and will
+            // not fit a phone screen once a few members are added. A
+            // Flickable rather than a ScrollView, so that scrolling glides.
             //
             // Left as a direct child of the tab. Wrapping it in a
             // ColumnLayout to pin a button outside the scroll area makes
-            // the ScrollView's width depend on its content's implicit
-            // width, which depends back on the ScrollView -- a binding
+            // the scroll area's width depend on its content's implicit
+            // width, which depends back on the scroll area -- a binding
             // loop QML resolves by zeroing something, and the pane comes
             // up broken. Refresh goes first INSIDE the column instead.
-            ScrollView {
+            Flickable {
                 id: accessScroll
                 clip: true
-                contentWidth: availableWidth
+                contentWidth: width
                 contentHeight: accCol.implicitHeight + 120
+                ScrollBar.vertical: ScrollBar {
+                    interactive: Qt.platform.os !== "ios" && Qt.platform.os !== "android"
+                }
 
             ColumnLayout {
                 id: accCol
-                width: accessScroll.availableWidth
-                spacing: 8
+                // Clear of the scroll bar
+                width: accessScroll.width - accessScroll.ScrollBar.vertical.implicitWidth - 4
+                spacing: 10
 
                 Button {
                     Layout.fillWidth: true
@@ -760,40 +984,24 @@ Item {
                     onClicked: sendCode("(ui-sync)")
                 }
 
-                Text {
-                    Layout.fillWidth: true
+                Note {
                     text: smsOn
                           ? "Unknown numbers that text the Link appear here for approval."
                           : "SMS control is off. Enable it in Settings."
-                    color: colDim
-                    font.pixelSize: 13
-                    wrapMode: Text.WordWrap
                 }
 
-                Text {
-                    Layout.fillWidth: true
+                SectionTitle {
                     visible: pendingModel.count > 0
                     text: "Requests"
-                    color: colText
-                    font.pixelSize: 15
-                    font.bold: true
                 }
 
-                Repeater {
-                    model: ListModel { id: pendingModel }
+                Group {
+                    visible: pendingModel.count > 0
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 56
-                        radius: 6
-                        color: colCard
+                    Repeater {
+                        model: ListModel { id: pendingModel }
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 8
-                            spacing: 8
-
+                        ListRow {
                             Rectangle {
                                 width: 10; height: 10; radius: 5
                                 color: colOrange
@@ -803,7 +1011,6 @@ Item {
                                 Layout.fillWidth: true
                                 text: "+" + model.num
                                 color: colText
-                                font.pixelSize: 15
                                 elide: Text.ElideRight
                             }
 
@@ -822,42 +1029,26 @@ Item {
                     }
                 }
 
-                Text {
-                    Layout.fillWidth: true
+                SectionTitle {
                     text: "Members"
-                    color: colText
-                    font.pixelSize: 15
-                    font.bold: true
                 }
 
-                Text {
-                    Layout.fillWidth: true
+                Note {
                     visible: memberModel.count === 0
                     text: "None yet."
-                    color: colDim
-                    font.pixelSize: 13
                 }
 
-                Repeater {
-                    model: ListModel { id: memberModel }
+                Group {
+                    visible: memberModel.count > 0
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 56
-                        radius: 6
-                        color: colCard
+                    Repeater {
+                        model: ListModel { id: memberModel }
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 8
-                            spacing: 8
-
+                        ListRow {
                             Text {
                                 Layout.fillWidth: true
                                 text: "+" + model.num
                                 color: model.en ? colText : colDim
-                                font.pixelSize: 15
                                 elide: Text.ElideRight
                             }
 
@@ -877,17 +1068,12 @@ Item {
                     }
                 }
 
-                Item { Layout.preferredHeight: 8 }
-
-                Text {
-                    Layout.fillWidth: true
+                Note {
+                    Layout.topMargin: 8
                     text: "Lock is latched by a package on the controller, not held " +
                           "by this one. Nothing is reported as locked until the " +
                           "controller confirms it \u2014 \"unknown\" means no reply " +
                           "came back, so treat the vehicle as unlocked."
-                    color: colDim
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
                 }
 
             }
@@ -951,63 +1137,66 @@ Item {
                     contentHeight: setCol.height
                     boundsBehavior: Flickable.StopAtBounds
                     ScrollBar.vertical: ScrollBar {
+                        id: setBar
                         policy: setFlick.contentHeight > setFlick.height
                                 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
                     }
 
                     Column {
                         id: setCol
-                        width: setFlick.width
-                        spacing: 14
+                        // Clear of the scroll bar
+                        width: setFlick.width - (setBar.visible ? setBar.width + 4 : 0)
+                        spacing: 10
 
                         Text {
                             width: parent.width
                             text: "Saved to the device. Applies to the next recording."
-                            color: colDim
-                            font.pixelSize: 13
+                            color: colLabel
+                            font.pointSize: 10
                             wrapMode: Text.WordWrap
                         }
 
-                        Row {
+                        SectionTitle {
                             width: parent.width
-                            spacing: 10
+                            text: "Logging"
+                        }
 
-                            Text {
-                                text: "Log rate"
-                                color: colText
-                                font.pixelSize: 15
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
+                        Group {
+                            width: parent.width
 
-                            Item {
-                                width: parent.width - 150 - parent.spacing
-                                height: 1
-                            }
+                            SettingRow {
+                                label: "Log rate"
+                                value: rateBox.currentText
+                                chevron: true
 
-                            ComboBox {
-                                id: rateBox
-                                width: 140
-                                model: ["1 Hz", "5 Hz", "10 Hz", "20 Hz", "50 Hz"]
-                                property var rates: [1, 5, 10, 20, 50]
-                                currentIndex: {
-                                    var i = rates.indexOf(Math.round(logRate))
-                                    return i < 0 ? 2 : i
+                                ComboBox {
+                                    id: rateBox
+                                    Layout.fillWidth: true
+                                    background: InputBackground {}
+                                    model: ["1 Hz", "5 Hz", "10 Hz", "20 Hz", "50 Hz"]
+                                    property var rates: [1, 5, 10, 20, 50]
+                                    currentIndex: {
+                                        var i = rates.indexOf(Math.round(logRate))
+                                        return i < 0 ? 2 : i
+                                    }
                                 }
                             }
-                        }
 
-                        Switch {
-                            id: lteBox
-                            width: parent.width
-                            text: "Log LTE signal and attach state"
-                            checked: logLte
-                        }
+                            SettingRow {
+                                label: "Log LTE signal and attach state"
+                                control: Switch {
+                                    id: lteBox
+                                    checked: logLte
+                                }
+                            }
 
-                        Switch {
-                            id: bootBox
-                            width: parent.width
-                            text: "Start logging automatically"
-                            checked: logAtBoot
+                            SettingRow {
+                                label: "Start logging automatically"
+                                control: Switch {
+                                    id: bootBox
+                                    checked: logAtBoot
+                                }
+                            }
                         }
 
                         Text {
@@ -1016,185 +1205,197 @@ Item {
                             text: "Waits up to 60 s for a CAN node. No shutdown event " +
                                   "exists on this hardware, so stop logging before " +
                                   "cutting power or the file tail may be lost."
-                            color: colDim
-                            font.pixelSize: 12
+                            color: colLabel
+                            font.pointSize: 10
                             wrapMode: Text.WordWrap
                         }
 
-                        Rectangle {
+                        SectionTitle {
                             width: parent.width
-                            height: 1
-                            color: colDim
-                            opacity: 0.3
+                            text: "SMS"
                         }
 
-                        Switch {
-                            id: smsBox
+                        Group {
                             width: parent.width
-                            text: "SMS control"
-                            checked: smsOn
+
+                            SettingRow {
+                                label: "SMS control"
+                                control: Switch {
+                                    id: smsBox
+                                    checked: smsOn
+                                }
+                            }
+
+                            SettingRow {
+                                visible: smsBox.checked
+                                label: "Allowed number"
+                                value: numField.text
+
+                                InputField {
+                                    id: numField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Allowed number, e.g. +15551234567"
+                                    inputMethodHints: Qt.ImhDialableCharactersOnly
+                                    text: ownerNum
+                                }
+                            }
                         }
 
-                        Column {
+                        Text {
                             width: parent.width
                             visible: smsBox.checked
-                            spacing: 4
-
-                            TextField {
-                                id: numField
-                                width: parent.width
-                                placeholderText: "Allowed number, e.g. +15551234567"
-                                inputMethodHints: Qt.ImhDialableCharactersOnly
-                                text: ownerNum
-                            }
-
-                            Text {
-                                width: parent.width
-                                text: "Approved numbers only, matched on the last 10 " +
-                                      "digits. Read-only by design \u2014 caller ID is " +
-                                      "forgeable, so nothing here moves the vehicle."
-                                color: colDim
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                            }
+                            text: "Approved numbers only, matched on the last 10 " +
+                                  "digits. Read-only by design \u2014 caller ID is " +
+                                  "forgeable, so nothing here moves the vehicle."
+                            color: colLabel
+                            font.pointSize: 10
+                            wrapMode: Text.WordWrap
                         }
 
-                        Rectangle {
+                        SectionTitle {
                             width: parent.width
-                            height: 1
-                            color: colDim
-                            opacity: 0.3
+                            text: "Cloud"
                         }
 
-                        Switch {
-                            id: mqttBox
+                        Group {
                             width: parent.width
-                            text: "Cloud telemetry (MQTT)"
-                            checked: mqttOn
-                        }
 
-                        Column {
-                            width: parent.width
-                            visible: mqttBox.checked
-                            spacing: 8
-
-                            TextField {
-                                id: hostField
-                                width: parent.width
-                                placeholderText: "Broker host, e.g. mqtt.thingsboard.cloud"
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
-
-                            Row {
-                                width: parent.width
-                                spacing: 10
-
-                                Text {
-                                    text: "Port"
-                                    color: colText
-                                    font.pixelSize: 15
-                                    anchors.verticalCenter: parent.verticalCenter
+                            SettingRow {
+                                label: "Cloud telemetry (MQTT)"
+                                control: Switch {
+                                    id: mqttBox
+                                    checked: mqttOn
                                 }
+                            }
 
-                                Item {
-                                    width: parent.width - 110 - 40 - parent.spacing
-                                    height: 1
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Broker host"
+                                value: hostField.text
+
+                                InputField {
+                                    id: hostField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Broker host, e.g. mqtt.thingsboard.cloud"
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                                 }
+                            }
 
-                                TextField {
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Port"
+                                value: portField.text !== "" ? portField.text : "1883"
+
+                                InputField {
                                     id: portField
-                                    width: 110
+                                    Layout.fillWidth: true
                                     placeholderText: "1883"
                                     inputMethodHints: Qt.ImhDigitsOnly
                                 }
                             }
 
-                            TextField {
-                                id: userField
-                                width: parent.width
-                                placeholderText: "Username / ThingsBoard access token"
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Username / token"
+                                value: userField.text
 
-                            TextField {
-                                id: passField
-                                width: parent.width
-                                placeholderText: "Password (blank for ThingsBoard)"
-                                echoMode: TextInput.Password
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
-
-                            TextField {
-                                id: clientField
-                                width: parent.width
-                                placeholderText: "Client ID"
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
-
-                            TextField {
-                                id: topicField
-                                width: parent.width
-                                placeholderText: "Topic"
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
-
-                            TextField {
-                                id: apnField
-                                width: parent.width
-                                placeholderText: "APN (leave blank to use the network's)"
-                                inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            }
-
-                            Row {
-                                width: parent.width
-
-                                Text {
-                                    text: "Publish every"
-                                    color: colText
-                                    font.pixelSize: 15
-                                }
-
-                                Item {
-                                    width: parent.width - 200
-                                    height: 1
-                                }
-
-                                Text {
-                                    text: Math.round(intSlider.value) + " s"
-                                    color: colText
-                                    font.pixelSize: 15
-                                    font.bold: true
+                                InputField {
+                                    id: userField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Username / ThingsBoard access token"
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                                 }
                             }
 
-                            Slider {
-                                id: intSlider
-                                width: parent.width
-                                from: 15
-                                to: 600
-                                stepSize: 15
-                                value: mqttInt
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Password"
+                                value: passField.text !== "" ? "\u2022\u2022\u2022\u2022\u2022\u2022" : ""
+
+                                InputField {
+                                    id: passField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Password (blank for ThingsBoard)"
+                                    echoMode: TextInput.Password
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                }
                             }
 
-                            Text {
-                                width: parent.width
-                                text: "A floor, not a guarantee: connecting costs a " +
-                                      "handshake of ten seconds or more on Cat-M1. " +
-                                      "Each sample is a few hundred bytes."
-                                color: colDim
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Client ID"
+                                value: clientField.text
+
+                                InputField {
+                                    id: clientField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Client ID"
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                }
                             }
 
-                            Text {
-                                width: parent.width
-                                text: "Plain TCP, not TLS \u2014 the SIM7070G's TLS " +
-                                      "stack is not reachable through these commands. " +
-                                      "Use a token scoped to this device only."
-                                color: colOrange
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Topic"
+                                value: topicField.text
+
+                                InputField {
+                                    id: topicField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Topic"
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                }
                             }
+
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "APN"
+                                value: apnField.text
+
+                                InputField {
+                                    id: apnField
+                                    Layout.fillWidth: true
+                                    placeholderText: "APN (leave blank to use the network's)"
+                                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                }
+                            }
+
+                            SettingRow {
+                                visible: mqttBox.checked
+                                label: "Publish every"
+                                value: Math.round(intSlider.value) + " s"
+
+                                Slider {
+                                    id: intSlider
+                                    Layout.fillWidth: true
+                                    from: 15
+                                    to: 600
+                                    stepSize: 15
+                                    value: mqttInt
+                                }
+                            }
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: mqttBox.checked
+                            text: "A floor, not a guarantee: connecting costs a " +
+                                  "handshake of ten seconds or more on Cat-M1. " +
+                                  "Each sample is a few hundred bytes."
+                            color: colLabel
+                            font.pointSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: mqttBox.checked
+                            text: "Plain TCP, not TLS \u2014 the SIM7070G's TLS " +
+                                  "stack is not reachable through these commands. " +
+                                  "Use a token scoped to this device only."
+                            color: colWarnText
+                            font.pointSize: 10
+                            wrapMode: Text.WordWrap
                         }
 
                         Item { width: 1; height: 8 }
