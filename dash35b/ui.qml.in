@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.3
+import QtQuick.Controls.Material 2.2
 import Vedder.vesc.utility 1.0
 
 import Vedder.vesc.commands 1.0
@@ -12,6 +13,275 @@ Item {
     anchors.margins: 5
 
     property Commands mCommands: VescIf.commands()
+
+    // Colors of the refreshed VESC Tool, or the closest older ones where the running VESC Tool does
+    // not have them, as it gives red for names it does not know
+    function themeColor(name, fallback) {
+        var c = Utility.getAppHexColor(name)
+        return c === "#ff0000" ? Utility.getAppHexColor(fallback) : c
+    }
+
+    readonly property color colCard: themeColor("cardBackground", "normalBackground")
+    readonly property color colBorder: themeColor("raisedBackground", "lightBackground")
+    readonly property color colText: themeColor("titleText", "lightText")
+    readonly property color colLabel: Utility.getAppHexColor("normalText")
+
+    // The parts below look like the VESC Tool settings pages. They are defined here rather than taken
+    // from VESC Tool, as the versions before its refreshed UI do not have them.
+
+    // Title above a group of settings
+    component SectionTitle: RowLayout {
+        property alias text: label.text
+
+        Layout.fillWidth: true
+        Layout.topMargin: 10
+        spacing: 10
+
+        Text {
+            id: label
+            color: Utility.getAppHexColor("lightAccent")
+            font.family: "Exan"
+            font.letterSpacing: 1.5
+            font.capitalization: Font.AllUppercase
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            height: 1
+            color: Utility.getAppHexColor("lightAccent")
+            opacity: 0.3
+        }
+    }
+
+    // Settings drawn as one card, with a line between them
+    component Group: Rectangle {
+        default property alias rows: rowColumn.data
+
+        Layout.fillWidth: true
+        implicitHeight: rowColumn.implicitHeight
+        radius: 12
+        color: colCard
+        border.color: colBorder
+
+        ColumnLayout {
+            id: rowColumn
+            width: parent.width
+            spacing: 0
+        }
+    }
+
+    // A setting in a Group, with its name on the left and its value, or a control such as a switch, on
+    // the right. Tapping it opens its editor below it.
+    component SettingRow: Item {
+        id: row
+
+        property string label: ""
+        property string value: ""
+        property Item control: null
+        property bool chevron: false
+        property bool expanded: false
+        default property alias editor: editorColumn.data
+        readonly property bool editable: editorColumn.children.length > 0
+
+        Layout.fillWidth: true
+        implicitHeight: header.height + (expanded ? editorColumn.implicitHeight + 12 : 0)
+        clip: true
+
+        Behavior on implicitHeight {
+            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+        }
+
+        onControlChanged: {
+            if (control) {
+                control.parent = holder
+            }
+        }
+
+        // One open at a time
+        onExpandedChanged: {
+            if (expanded && parent) {
+                for (var i = 0; i < parent.children.length; i++) {
+                    var r = parent.children[i]
+                    if (r !== row && r.editable !== undefined && r.expanded) {
+                        r.expanded = false
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            visible: row.y > 0
+            color: colBorder
+        }
+
+        Item {
+            id: header
+            width: parent.width
+            height: Math.max(52, headerRow.implicitHeight + 12)
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: row.editable
+                onClicked: row.expanded = !row.expanded
+            }
+
+            RowLayout {
+                id: headerRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 14
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    text: row.label
+                    wrapMode: Text.Wrap
+                    color: colText
+                    font.weight: row.expanded ? Font.Medium : Font.Normal
+                }
+
+                Text {
+                    Layout.maximumWidth: row.width * 0.45
+                    visible: row.control === null && text !== ""
+                    text: row.value
+                    elide: Text.ElideRight
+                    color: colText
+                    font.weight: Font.Medium
+                }
+
+                Item {
+                    id: holder
+                    implicitWidth: row.control ? row.control.implicitWidth : 0
+                    implicitHeight: row.control ? row.control.implicitHeight : 0
+                    visible: row.control !== null
+                }
+
+                Text {
+                    visible: row.chevron
+                    text: "›"
+                    rotation: row.expanded ? 90 : 0
+                    font.pointSize: 18
+                    color: Utility.getAppHexColor("disabledText")
+                }
+            }
+        }
+
+        ColumnLayout {
+            id: editorColumn
+            x: 14
+            y: header.height
+            width: parent.width - 26
+            visible: row.expanded || row.height > header.height + 1
+        }
+    }
+
+    // Background that styles ComboBox, SpinBox and TextField like the cards
+    component InputBackground: Rectangle {
+        implicitWidth: parent instanceof SpinBox ? 140 : 120
+        implicitHeight: 48
+        radius: 12
+        color: colCard
+        border.color: parent.activeFocus ? Material.accent : colBorder
+    }
+
+    // Help text under a group
+    component Note: Text {
+        Layout.fillWidth: true
+        Layout.leftMargin: 4
+        Layout.rightMargin: 4
+        wrapMode: Text.WordWrap
+        color: colLabel
+        font.pointSize: 10
+    }
+
+    // Section switcher: tap only, like the chips on the VESC Tool settings pages. It wraps instead of scrolling
+    // sideways, so that a sideways swipe always reaches the VESC Tool pages around the package.
+    component SectionChips: Flow {
+        id: chips
+
+        property var model: []
+        property int currentIndex: 0
+        // dots[i] === true shows a dot on chip i
+        property var dots: []
+
+        signal chosen(int index)
+
+        Layout.fillWidth: true
+        spacing: 6
+
+        Repeater {
+            model: chips.model
+
+            AbstractButton {
+                id: chip
+
+                readonly property bool on: index === chips.currentIndex
+
+                text: modelData
+                focusPolicy: Qt.NoFocus
+                // 44 pt touch target around the 32 pt pill
+                topInset: 6
+                bottomInset: 6
+                leftPadding: 12
+                rightPadding: 12
+                implicitHeight: 44
+                implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
+                Accessible.role: Accessible.PageTab
+                Accessible.name: text
+                onClicked: chips.chosen(index)
+
+                contentItem: Item {
+                    implicitWidth: chipRow.implicitWidth
+                    implicitHeight: chipRow.implicitHeight
+
+                    Row {
+                        id: chipRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Text {
+                            id: chipLabel
+                            anchors.verticalCenter: parent.verticalCenter
+                            // As wide as the selected label, so that selecting does not move the chips after it
+                            width: Math.ceil(Math.max(implicitWidth, selectedMetrics.advanceWidth))
+                            horizontalAlignment: Text.AlignHCenter
+                            text: chip.text
+                            color: chip.on ? colText : colLabel
+                            font.weight: chip.on ? Font.Medium : Font.Normal
+
+                            TextMetrics {
+                                id: selectedMetrics
+                                font.family: chipLabel.font.family
+                                font.pointSize: chipLabel.font.pointSize
+                                font.weight: Font.Medium
+                                text: chip.text
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 6
+                            height: 6
+                            radius: 3
+                            visible: chips.dots[index] === true
+                            color: Material.accent
+                        }
+                    }
+                }
+
+                background: Rectangle {
+                    radius: height / 2
+                    color: chip.on ? Qt.rgba(Material.accent.r, Material.accent.g, Material.accent.b, 0.12) : colCard
+                    border.width: chip.on ? 1.5 : 1
+                    border.color: chip.on ? Material.accent : colBorder
+                }
+            }
+        }
+    }
 
     // Set while the controls are being populated from the display, so that
     // the handlers below do not write the freshly read values straight back.
@@ -224,195 +494,197 @@ Item {
     ButtonGroup { id: speedGroup }
     ButtonGroup { id: tempGroup }
 
-    ScrollView {
+    ColumnLayout {
         anchors.fill: parent
-        contentWidth: availableWidth
-        clip: true
+        spacing: 10
 
-        ColumnLayout {
-            width: parent.width
-            spacing: 4
+        Text {
+            Layout.fillWidth: true
+            color: colText
+            font.pointSize: 15
+            font.weight: Font.Medium
+            text: "Dash35B Package"
+        }
 
-            Text {
-                color: Utility.getAppHexColor("lightText")
-                Layout.fillWidth: true
-                text: "Dash35B Package"
-                font.weight: Font.Black
-                font.pointSize: 18
+        SectionChips {
+            model: ["Live page", "Display", "Pages", "Hardware", "Buttons"]
+            currentIndex: editing
+            onChosen: function(index) {
+                editing = index
+                flick.contentY = 0
+            }
+        }
+
+        // A Flickable rather than a ScrollView, so that scrolling glides
+        Flickable {
+            id: flick
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 0
+            contentWidth: width
+            contentHeight: content.height + 10
+            clip: true
+            ScrollBar.vertical: ScrollBar {
+                interactive: Qt.platform.os !== "ios" && Qt.platform.os !== "android"
             }
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 2
-                color: Utility.getAppHexColor("lightText")
-            }
+            ColumnLayout {
+                id: content
+                // Clear of the scroll bar
+                width: flick.width - flick.ScrollBar.vertical.implicitWidth - 4
+                spacing: 10
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.bottomMargin: 4
-
-                Text {
-                    text: "Editing"
-                    color: Utility.getAppHexColor("lightText")
+                SectionTitle {
+                    Layout.topMargin: 0
+                    text: "Status"
                 }
 
-                ComboBox {
-                    id: sectionBox
-                    Layout.fillWidth: true
-                    model: ["Live page", "Display", "Pages", "Hardware", "Buttons"]
-                    onActivated: editing = currentIndex
-                }
-
-                Button {
-                    text: "Read"
-                    onClicked: {
-                        statusText.text = "Reading..."
-                        haveRead = false
-                        readPoll.running = true
-                    }
-                }
-            }
-
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 3
-                title: "Units"
-
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 3
-
-                        Text {
-                            text: "Speed"
-                            color: Utility.getAppHexColor("lightText")
-                        }
-
-                        RadioButton {
-                            id: speedMetric
-                            ButtonGroup.group: speedGroup
-                            text: "km/h"
-                            checked: true
-                            onClicked: if (!loading) setSetting("units-metric", 1)
-                        }
-
-                        RadioButton {
-                            id: speedImperial
-                            ButtonGroup.group: speedGroup
-                            text: "MPH"
-                            onClicked: if (!loading) setSetting("units-metric", 0)
-                        }
-
-                        Text {
-                            text: "Temperature"
-                            color: Utility.getAppHexColor("lightText")
-                        }
-
-                        RadioButton {
-                            id: tempMetric
-                            ButtonGroup.group: tempGroup
-                            text: "C"
-                            checked: true
-                            onClicked: if (!loading) setSetting("temps-metric", 1)
-                        }
-
-                        RadioButton {
-                            id: tempImperial
-                            ButtonGroup.group: tempGroup
-                            text: "F"
-                            onClicked: if (!loading) setSetting("temps-metric", 0)
+                Group {
+                    SettingRow {
+                        label: "Display"
+                        control: Text {
+                            id: statusText
+                            text: "Waiting for display..."
+                            elide: Text.ElideRight
+                            color: colText
+                            font.weight: Font.Medium
                         }
                     }
-                                }
-            }
 
-
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 3
-                title: "Warning Thresholds"
-
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-
-                        Text {
-                            text: "Battery"
-                            color: Utility.getAppHexColor("lightText")
+                    SettingRow {
+                        label: "Controller"
+                        control: Text {
+                            id: escState
+                            text: "unknown"
+                            elide: Text.ElideRight
+                            color: colText
+                            font.weight: Font.Medium
                         }
+                    }
+
+                    SettingRow {
+                        label: "Package version"
+                        value: "{{VERSION}}"
+                    }
+                }
+
+                SectionTitle {
+                    visible: editing === 3
+                    text: "Units"
+                }
+
+                Group {
+                    visible: editing === 3
+                    SettingRow {
+                        label: "Speed"
+                        value: speedMetric.checked ? "km/h" : "MPH"
+                        chevron: true
+
+                        RowLayout {
+                            RadioButton {
+                                id: speedMetric
+                                ButtonGroup.group: speedGroup
+                                text: "km/h"
+                                checked: true
+                                onClicked: if (!loading) setSetting("units-metric", 1)
+                            }
+
+                            RadioButton {
+                                id: speedImperial
+                                ButtonGroup.group: speedGroup
+                                text: "MPH"
+                                onClicked: if (!loading) setSetting("units-metric", 0)
+                            }
+                        }
+                    }
+
+                    SettingRow {
+                        label: "Temperature"
+                        value: tempMetric.checked ? "C" : "F"
+                        chevron: true
+
+                        RowLayout {
+                            RadioButton {
+                                id: tempMetric
+                                ButtonGroup.group: tempGroup
+                                text: "C"
+                                checked: true
+                                onClicked: if (!loading) setSetting("temps-metric", 1)
+                            }
+
+                            RadioButton {
+                                id: tempImperial
+                                ButtonGroup.group: tempGroup
+                                text: "F"
+                                onClicked: if (!loading) setSetting("temps-metric", 0)
+                            }
+                        }
+                    }
+                }
+
+                SectionTitle {
+                    visible: editing === 3
+                    text: "Warning Thresholds"
+                }
+
+                Group {
+                    visible: editing === 3
+                    SettingRow {
+                        label: "Battery"
+                        value: battHot.value + " °C"
 
                         SpinBox {
                             id: battHot
                             Layout.fillWidth: true
+                            background: InputBackground {}
                             from: 0
                             to: 200
                             editable: true
                             onValueModified: if (!loading) setSetting("batt-hot", value.toFixed(1))
                         }
+                    }
 
-                        Text {
-                            text: "Controller"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                    SettingRow {
+                        label: "Controller"
+                        value: escHot.value + " °C"
 
                         SpinBox {
                             id: escHot
                             Layout.fillWidth: true
+                            background: InputBackground {}
                             from: 0
                             to: 200
                             editable: true
                             onValueModified: if (!loading) setSetting("esc-hot", value.toFixed(1))
                         }
+                    }
 
-                        Text {
-                            text: "Motor"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                    SettingRow {
+                        label: "Motor"
+                        value: motorHot.value + " °C"
 
                         SpinBox {
                             id: motorHot
                             Layout.fillWidth: true
+                            background: InputBackground {}
                             from: 0
                             to: 200
                             editable: true
                             onValueModified: if (!loading) setSetting("motor-hot", value.toFixed(1))
                         }
-
-                        Text {
-                            text: "Degrees C"
-                            color: Utility.getAppHexColor("lightText")
-                            font.pointSize: 8
-                        }
-
-                        Text {
-                            text: ""
-                        }
                     }
-                                }
-            }
+                }
 
+                SectionTitle {
+                    visible: editing === 3
+                    text: "Backlight"
+                }
 
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 3
-                title: "Backlight"
-
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 3
-
-                        Text {
-                            text: "Bright"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                Group {
+                    visible: editing === 3
+                    SettingRow {
+                        label: "Bright"
+                        value: blBright.value
 
                         Slider {
                             id: blBright
@@ -430,16 +702,11 @@ Item {
                                 }
                             }
                         }
+                    }
 
-                        Text {
-                            text: blBright.value
-                            color: Utility.getAppHexColor("lightText")
-                        }
-
-                        Text {
-                            text: "Dim"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                    SettingRow {
+                        label: "Dim"
+                        value: blDim.value
 
                         Slider {
                             id: blDim
@@ -457,201 +724,227 @@ Item {
                                 }
                             }
                         }
-
-                        Text {
-                            text: blDim.value
-                            color: Utility.getAppHexColor("lightText")
-                        }
                     }
-                                }
-            }
+                }
 
+                SectionTitle {
+                    visible: editing === 3
+                    text: "Controller"
+                }
 
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 3
-                title: "Controller"
-
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Text {
-                            text: "dash_esc"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                Group {
+                    visible: editing === 3
+                    SettingRow {
+                        label: "dash_esc"
+                        value: escMode.currentText
+                        chevron: true
 
                         ComboBox {
                             id: escMode
                             Layout.fillWidth: true
+                            background: InputBackground {}
                             model: ["Auto detect", "Assume present", "Assume absent"]
                             onActivated: if (!loading) setSetting("esc-mode", currentIndex)
                         }
                     }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Text {
-                            text: "CAN id (0 = auto)"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                    SettingRow {
+                        label: "CAN id (0 = auto)"
+                        value: escId.value
 
                         SpinBox {
                             id: escId
+                            Layout.fillWidth: true
+                            background: InputBackground {}
                             from: 0
                             to: 253
                             editable: true
                             onValueModified: if (!loading) setSetting("esc-id", value)
                         }
                     }
+                }
 
-                    Text {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        color: Utility.getAppHexColor("lightText")
-                        text: "Without dash_esc: speed, duty, voltage, current and " +
-                              "temperatures work, and a VESC BMS still gives charge " +
-                              "and the cell page. Watt hours, amp hours, odometer, " +
-                              "range, efficiency, fault names, pitch, cruise, " +
-                              "signals, high beam and kickstand do not. Modes are " +
-                              "sent as a temporary profile, cleared by a power cycle."
-                        font.pointSize: 8
-                    }
+                Note {
+                    visible: editing === 3
+                    text: "Without dash_esc: speed, duty, voltage, current and " +
+                          "temperatures work, and a VESC BMS still gives charge " +
+                          "and the cell page. Watt hours, amp hours, odometer, " +
+                          "range, efficiency, fault names, pitch, cruise, " +
+                          "signals, high beam and kickstand do not. Modes are " +
+                          "sent as a temporary profile, cleared by a power cycle."
+                }
+
+                SectionTitle {
+                    visible: editing === 1
+                    text: "Display"
+                }
+
+                Group {
+                    visible: editing === 1
+                    SettingRow {
+                        label: "Dial and accent"
+                        value: accentBox.currentText
+                        chevron: true
+
+                        ComboBox {
+                            id: accentBox
+                            Layout.fillWidth: true
+                            background: InputBackground {}
+                            model: colorNames
+                            onActivated: {
+                                if (!loading) {
+                                    setSetting("col-accent", colorValues[currentIndex])
                                 }
-            }
-
-
-
-
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 1
-                title: "Display"
-
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-
-                        Text {
-                            text: "Dial and accent"
-                            color: Utility.getAppHexColor("lightText")
-                        }
-
-                    ComboBox {
-                        id: accentBox
-                        Layout.fillWidth: true
-                        model: colorNames
-                        onActivated: {
-                            if (!loading) {
-                                setSetting("col-accent", colorValues[currentIndex])
                             }
                         }
                     }
 
-                        Text {
-                            text: "Text"
-                            color: Utility.getAppHexColor("lightText")
-                        }
+                    SettingRow {
+                        label: "Text"
+                        value: textBox.currentText
+                        chevron: true
 
-                    ComboBox {
-                        id: textBox
-                        Layout.fillWidth: true
-                        model: colorNames
-                        onActivated: {
-                            if (!loading) {
-                                setSetting("col-text", colorValues[currentIndex])
+                        ComboBox {
+                            id: textBox
+                            Layout.fillWidth: true
+                            background: InputBackground {}
+                            model: colorNames
+                            onActivated: {
+                                if (!loading) {
+                                    setSetting("col-text", colorValues[currentIndex])
+                                }
                             }
                         }
-                    }
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        color: Utility.getAppHexColor("lightText")
-                        text: "The background stays black: every icon and font " +
-                              "is antialiased against it, so anything else " +
-                              "leaves dark fringes."
-                        font.pointSize: 8
                     }
                 }
-            }
 
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 0
-                title: "Live Page"
+                Note {
+                    visible: editing === 1
+                    text: "The background stays black: every icon and font " +
+                          "is antialiased against it, so anything else " +
+                          "leaves dark fringes."
+                }
 
-                ColumnLayout {
-                    anchors.fill: parent
+                SectionTitle {
+                    visible: editing === 1
+                    text: "Status Icons"
+                }
 
-                    Text {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        color: Utility.getAppHexColor("lightText")
-                        text: "Four readings, two by two. Colour by value ramps " +
-                              "green to amber to red across the range."
-                        font.pointSize: 8
+                Note {
+                    visible: editing === 1
+                    text: "Unticked icons are not drawn at all."
+                }
+
+                Group {
+                    visible: editing === 1
+                    SettingRow {
+                        label: "Colour the battery bar by charge"
+                        control: Switch {
+                            id: battRampBox
+                            onClicked: {
+                                if (!loading) {
+                                    setSetting("batt-ramp", checked ? 1 : 0)
+                                }
+                            }
+                        }
+                    }
+
+                    SettingRow {
+                        label: "Show the boot splash"
+                        control: Switch {
+                            id: splashBox
+                            checked: true
+                            onClicked: {
+                                if (!loading) {
+                                    setSetting("splash-en", checked ? 1 : 0)
+                                }
+                            }
+                        }
                     }
 
                     Repeater {
-                        id: slotRepeater
-                        model: 4
+                        id: iconRepeater
+                        model: iconNames
 
-                        ColumnLayout {
-                            property int slotIndex: index
-                            property alias source: slotBox.currentIndex
-                            property alias slotColor: slotColBox.currentIndex
-                            property alias ramp: rampBox.checked
-                            property alias rangeLo: loBox.value
-                            property alias rangeHi: hiBox.value
-                            Layout.fillWidth: true
-                            Layout.bottomMargin: 6
-
-                            Text {
-                                text: (slotIndex < 2 ? "Top " : "Bottom ") +
-                                      (slotIndex % 2 === 0 ? "left" : "right")
-                                color: Utility.getAppHexColor("lightText")
-                                font.weight: Font.Black
+                        SettingRow {
+                            property int iconIndex: index
+                            property alias checked: iconSwitch.checked
+                            label: modelData
+                            control: Switch {
+                                id: iconSwitch
+                                checked: true
+                                onClicked: if (!loading) setIconBit(iconIndex, checked)
                             }
+                        }
+                    }
+                }
 
-                            RowLayout {
+                SectionTitle {
+                    visible: editing === 0
+                    text: "Live Page"
+                }
+
+                Note {
+                    visible: editing === 0
+                    text: "Four readings, two by two. Colour by value ramps " +
+                          "green to amber to red across the range."
+                }
+
+                Repeater {
+                    id: slotRepeater
+                    model: 4
+
+                    Group {
+                        property int slotIndex: index
+                        property alias source: slotBox.currentIndex
+                        property alias slotColor: slotColBox.currentIndex
+                        property alias ramp: rampBox.checked
+                        property alias rangeLo: loBox.value
+                        property alias rangeHi: hiBox.value
+                        visible: editing === 0
+                        SettingRow {
+                            label: (slotIndex < 2 ? "Top " : "Bottom ") +
+                                   (slotIndex % 2 === 0 ? "left" : "right")
+                            value: slotBox.currentText
+                            chevron: true
+
+                            ComboBox {
+                                id: slotBox
                                 Layout.fillWidth: true
-
-                                ComboBox {
-                                    id: slotBox
-                                    Layout.fillWidth: true
-                                    model: slotNames
-                                    onActivated: {
-                                        if (!loading) {
-                                            setSetting("slot-" + slotIndex,
-                                                       currentIndex)
-                                        }
-                                    }
-                                }
-
-                                ComboBox {
-                                    id: slotColBox
-                                    Layout.preferredWidth: 110
-                                    model: colorNames
-                                    onActivated: {
-                                        if (!loading) {
-                                            setSetting("slot-col-" + slotIndex,
-                                                       colorValues[currentIndex])
-                                        }
+                                background: InputBackground {}
+                                model: slotNames
+                                onActivated: {
+                                    if (!loading) {
+                                        setSetting("slot-" + slotIndex,
+                                                   currentIndex)
                                     }
                                 }
                             }
+                        }
 
-                            CheckBox {
+                        SettingRow {
+                            label: "Colour"
+                            value: slotColBox.currentText
+                            chevron: true
+
+                            ComboBox {
+                                id: slotColBox
+                                Layout.fillWidth: true
+                                background: InputBackground {}
+                                model: colorNames
+                                onActivated: {
+                                    if (!loading) {
+                                        setSetting("slot-col-" + slotIndex,
+                                                   colorValues[currentIndex])
+                                    }
+                                }
+                            }
+                        }
+
+                        SettingRow {
+                            label: "Colour by value"
+                            control: Switch {
                                 id: rampBox
-                                text: "Colour by value"
                                 onClicked: {
                                     if (!loading) {
                                         setSetting("slot-mode-" + slotIndex,
@@ -659,17 +952,17 @@ Item {
                                     }
                                 }
                             }
+                        }
 
-                            // The range gets its own row: sharing one with the
-                            // checkbox leaves the spin boxes too narrow to use
-                            // on the mobile UI.
+                        SettingRow {
+                            visible: rampBox.checked
+                            label: "Range"
+                            value: loBox.value + " to " + hiBox.value
+
                             RowLayout {
                                 Layout.fillWidth: true
-                                Layout.leftMargin: 14
-                                visible: rampBox.checked
 
                                 Text {
-                                    Layout.preferredWidth: 34
                                     text: "from"
                                     color: Utility.getAppHexColor("lightText")
                                 }
@@ -677,6 +970,7 @@ Item {
                                 SpinBox {
                                     id: loBox
                                     Layout.fillWidth: true
+                                    background: InputBackground {}
                                     from: -1000
                                     to: 10000
                                     stepSize: 5
@@ -690,7 +984,6 @@ Item {
                                 }
 
                                 Text {
-                                    Layout.preferredWidth: 18
                                     text: "to"
                                     color: Utility.getAppHexColor("lightText")
                                 }
@@ -698,6 +991,7 @@ Item {
                                 SpinBox {
                                     id: hiBox
                                     Layout.fillWidth: true
+                                    background: InputBackground {}
                                     from: -1000
                                     to: 10000
                                     value: 100
@@ -714,213 +1008,123 @@ Item {
                         }
                     }
                 }
-            }
 
-            GroupBox {
-                Layout.fillWidth: true
-                visible: editing === 2
-                title: "Pages"
+                SectionTitle {
+                    visible: editing === 2
+                    text: "Pages"
+                }
 
-                ColumnLayout {
-                    anchors.fill: parent
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        CheckBox {
+                Group {
+                    visible: editing === 2
+                    SettingRow {
+                        label: "Live"
+                        control: Switch {
                             id: page1On
-                            text: "Live"
-                            checked: true
-                            onClicked: if (!loading) setPageMask()
-                        }
-
-                        CheckBox {
-                            id: page2On
-                            text: "Trip"
-                            checked: true
-                            onClicked: if (!loading) setPageMask()
-                        }
-
-                        CheckBox {
-                            id: page3On
-                            text: "Stats"
-                            checked: true
-                            onClicked: if (!loading) setPageMask()
-                        }
-
-                        CheckBox {
-                            id: page4On
-                            text: "Cells"
                             checked: true
                             onClicked: if (!loading) setPageMask()
                         }
                     }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Text {
-                            text: "Drive modes"
-                            color: Utility.getAppHexColor("lightText")
+                    SettingRow {
+                        label: "Trip"
+                        control: Switch {
+                            id: page2On
+                            checked: true
+                            onClicked: if (!loading) setPageMask()
                         }
+                    }
+
+                    SettingRow {
+                        label: "Stats"
+                        control: Switch {
+                            id: page3On
+                            checked: true
+                            onClicked: if (!loading) setPageMask()
+                        }
+                    }
+
+                    SettingRow {
+                        label: "Cells"
+                        control: Switch {
+                            id: page4On
+                            checked: true
+                            onClicked: if (!loading) setPageMask()
+                        }
+                    }
+
+                    SettingRow {
+                        label: "Drive modes"
+                        value: driveModes.value
 
                         SpinBox {
                             id: driveModes
+                            Layout.fillWidth: true
+                            background: InputBackground {}
                             from: 1
                             to: 5
                             onValueModified: if (!loading) setSetting("drive-modes", value)
                         }
                     }
-                                }
-            }
+                }
 
+                SectionTitle {
+                    visible: editing === 2
+                    text: "On-Display Settings Page"
+                }
 
-            Text {
-                Layout.fillWidth: true
-                Layout.topMargin: 6
-                visible: editing === 2
-                color: Utility.getAppHexColor("lightText")
-                font.weight: Font.Black
-                text: "On-Display Settings Page"
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 14
-                Layout.bottomMargin: 6
-                visible: editing === 2
-
-                Text {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Utility.getAppHexColor("lightText")
+                Note {
+                    visible: editing === 2
                     text: "Only the first six ticked are drawn."
-                    font.pointSize: 8
                 }
 
-                Repeater {
-                    id: rowRepeater
-                    model: rowNames
+                Group {
+                    visible: editing === 2
+                    Repeater {
+                        id: rowRepeater
+                        model: rowNames
 
-                    CheckBox {
-                        property int rowIndex: index
-                        text: modelData
-                        checked: index < 4
-                        onClicked: if (!loading) setMaskBit(rowIndex, checked)
-                    }
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                Layout.topMargin: 6
-                visible: editing === 1
-                color: Utility.getAppHexColor("lightText")
-                font.weight: Font.Black
-                text: "Status Icons"
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 14
-                Layout.bottomMargin: 6
-                visible: editing === 1
-
-                Text {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Utility.getAppHexColor("lightText")
-                    text: "Unticked icons are not drawn at all."
-                    font.pointSize: 8
-                }
-
-                CheckBox {
-                    id: battRampBox
-                    text: "Colour the battery bar by charge"
-                    onClicked: {
-                        if (!loading) {
-                            setSetting("batt-ramp", checked ? 1 : 0)
+                        SettingRow {
+                            property int rowIndex: index
+                            property alias checked: rowSwitch.checked
+                            label: modelData
+                            control: Switch {
+                                id: rowSwitch
+                                checked: index < 4
+                                onClicked: if (!loading) setMaskBit(rowIndex, checked)
+                            }
                         }
                     }
                 }
 
-                CheckBox {
-                    id: splashBox
-                    text: "Show the boot splash"
-                    checked: true
-                    onClicked: {
-                        if (!loading) {
-                            setSetting("splash-en", checked ? 1 : 0)
-                        }
-                    }
+                SectionTitle {
+                    visible: editing === 4
+                    text: "Buttons"
                 }
 
-                Repeater {
-                    id: iconRepeater
-                    model: iconNames
-
-                    CheckBox {
-                        property int iconIndex: index
-                        text: modelData
-                        checked: true
-                        onClicked: if (!loading) setIconBit(iconIndex, checked)
-                    }
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                Layout.topMargin: 6
-                visible: editing === 4
-                color: Utility.getAppHexColor("lightText")
-                font.weight: Font.Black
-                text: "Buttons"
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 14
-                Layout.bottomMargin: 6
-                visible: editing === 4
-
-                Text {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Utility.getAppHexColor("lightText")
+                Note {
+                    visible: editing === 4
                     text: "Short presses are overridden while the settings page " +
                           "is open, so it can always be navigated."
-                    font.pointSize: 8
                 }
 
                 Repeater {
                     id: btnRepeater
                     model: 4
 
-                    ColumnLayout {
+                    Group {
                         property int btnIndex: index
                         property alias shortIndex: shortBox.currentIndex
                         property alias longIndex: longBox.currentIndex
-                        Layout.fillWidth: true
-                        Layout.bottomMargin: 4
-
-                        Text {
-                            text: "Button " + btnIndex
-                            color: Utility.getAppHexColor("lightText")
-                            font.weight: Font.Black
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Text {
-                                Layout.preferredWidth: 44
-                                text: "Short"
-                                color: Utility.getAppHexColor("lightText")
-                            }
+                        visible: editing === 4
+                        SettingRow {
+                            label: "Button " + btnIndex + ", short"
+                            value: shortBox.currentText
+                            chevron: true
 
                             ComboBox {
                                 id: shortBox
                                 Layout.fillWidth: true
+                                background: InputBackground {}
                                 model: actionNames
                                 onActivated: {
                                     if (!loading) {
@@ -931,18 +1135,15 @@ Item {
                             }
                         }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Text {
-                                Layout.preferredWidth: 44
-                                text: "Long"
-                                color: Utility.getAppHexColor("lightText")
-                            }
+                        SettingRow {
+                            label: "Button " + btnIndex + ", long"
+                            value: longBox.currentText
+                            chevron: true
 
                             ComboBox {
                                 id: longBox
                                 Layout.fillWidth: true
+                                background: InputBackground {}
                                 model: actionNames
                                 onActivated: {
                                     if (!loading) {
@@ -955,63 +1156,30 @@ Item {
                     }
                 }
             }
+        }
 
-            Rectangle {
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.rightMargin: flick.ScrollBar.vertical.implicitWidth + 4
+
+            Button {
                 Layout.fillWidth: true
-                Layout.topMargin: 6
-                Layout.preferredHeight: 2
-                color: Utility.getAppHexColor("lightText")
+                Layout.preferredWidth: 1
+                text: "Reset All"
+                onClicked: {
+                    statusText.text = "Resetting..."
+                    send("(settings-reset)")
+                }
             }
 
-            RowLayout {
+            Button {
                 Layout.fillWidth: true
-
-                Button {
-                    text: "Reset All"
-                    onClicked: {
-                        statusText.text = "Resetting..."
-                        send("(settings-reset)")
-                    }
-                }
-
-                Button {
-                    text: "Read From Display"
-                    onClicked: {
-                        statusText.text = "Reading..."
-                        haveRead = false
-                        readPoll.running = true
-                    }
-                }
-
-                Text {
-                    id: statusText
-                    Layout.fillWidth: true
-                    color: Utility.getAppHexColor("lightText")
-                    wrapMode: Text.WordWrap
-                    text: "Waiting for display..."
-                }
-            }
-
-            RowLayout {
-                Text {
-                    id: escState
-                    Layout.fillWidth: true
-                    color: Utility.getAppHexColor("lightText")
-                    wrapMode: Text.WordWrap
-                    text: "Controller: unknown"
-                }
-            }
-
-            RowLayout {
-                Text {
-                    text: "Package Version:"
-                    color: Utility.getAppHexColor("lightText")
-                }
-
-                Text {
-                    text: "{{VERSION}}"
-                    color: Utility.getAppHexColor("lightText")
-                    font.weight: Font.Black
+                Layout.preferredWidth: 1
+                text: "Read From Display"
+                onClicked: {
+                    statusText.text = "Reading..."
+                    haveRead = false
+                    readPoll.running = true
                 }
             }
         }
